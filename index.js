@@ -361,11 +361,13 @@ export function apply(ctx, rawConfig) {
       lines.push(`dsh 插件：在线（这个工具就是它答的），监听 127.0.0.1:${cfg.port}`);
       lines.push(`被敲次数：${knockCount}${lastKnockAt ? '，上次 ' + lastKnockAt.toLocaleString('zh-CN', { hour12: false }) : ''}`);
       if (lastKnockSession) lines.push(`上次敲击送进的会话：${lastKnockSession}`);
-      lines.push(
-        overlaySeenAt
-          ? `悬浮窗：${Math.round((Date.now() - overlaySeenAt) / 1000)} 秒前来问过`
-          : '悬浮窗：没来问过（没开，或者它瞄的端口不对）',
-      );
+      if (overlaySeenAt) {
+        lines.push(`悬浮窗：${Math.round((Date.now() - overlaySeenAt) / 1000)} 秒前来问过 ✓`);
+      } else {
+        lines.push('悬浮窗：没来问过 —— 没有它，主人就没法「敲一下」叫我走棋');
+        lines.push('  → 去开这个（自己起不来就让主人双击）：' + path.join(cfg.bridgeDir, '..', 'overlay', 'overlay.exe'));
+        lines.push('  → 本机现成的那份：F:\\大肥鱼\\05-临时文件\\tts-bridge\\overlay.exe');
+      }
       try {
         const api = await getApi();
         const d = await api.detect(cfg.bridgeDir, { timeout: 12000 });
