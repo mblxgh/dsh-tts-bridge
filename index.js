@@ -96,31 +96,36 @@ export function apply(ctx, rawConfig) {
   }
   logPath = path.join(cfg.bridgeDir, 'dsh-plugin.log');
 
-  // ── 惰性加载 golib（它用 tts-core 的 runLua，跟 TTS 通信）──
-  let libPromise = null;
-  const getLib = () => {
-    if (!libPromise) {
-      const href = pathToFileURL(path.join(cfg.bridgeDir, 'golib.mjs')).href;
-      libPromise = import(href).catch((e) => {
-        libPromise = null;
+  // ── 游戏层：不写死是哪个游戏，扫 bridge/games/ 现认 ──
+  let apiPromise = null;
+  const getApi = () => {
+    if (!apiPromise) {
+      const href = pathToFileURL(path.join(cfg.bridgeDir, 'game-api.mjs')).href;
+      apiPromise = import(href).catch((e) => {
+        apiPromise = null;
         throw new Error(`加载 ${href} 失败：${e.message}`);
       });
     }
-    return libPromise;
+    return apiPromise;
   };
 
-  // ── 惰性加载 katago（只在真要判断形势时才 import，同样不预热进程）──
-  let katagoPromise = null;
-  const getKatago = () => {
-    if (!katagoPromise) {
-      const href = pathToFileURL(path.join(cfg.bridgeDir, 'katago.mjs')).href;
-      katagoPromise = import(href).catch((e) => {
-        katagoPromise = null;
-        throw new Error(`加载 ${href} 失败：${e.message}`);
-      });
+  /**
+   * 认出桌上是什么游戏。认不出来就抛一条能直接给主人看的话。
+   * 每次工具调用现扫 —— 加游戏文件不用重启也能认（模块有缓存，改文件要重启）。
+   */
+  async function resolveGame() {
+    const api = await getApi();
+    const d = await api.detect(cfg.bridgeDir, { timeout: 20000 });
+    if (!d.game) {
+      const known = d.games.map((g) => g.title || g.id).join('、') || '（一个都没有）';
+      const lines = ['认不出桌上是什么游戏。', `已装的游戏：${known}`];
+      if (d.errors?.length) lines.push('加载出错的：' + d.errors.join('；'));
+      lines.push('桌上的对象名（前 20 个）：');
+      for (const n of d.names.slice(0, 20)) lines.push(`  ${n} × ${d.kinds[n]}`);
+      throw new Error(lines.join('\n'));
     }
-    return katagoPromise;
-  };
+    return d;
+  }
 
   // ── 运行态 ──
   let knockCount = 0;
@@ -297,23 +302,22 @@ export function apply(ctx, rawConfig) {
     knockCount++;
     lastKnockAt = new Date();
 
-    const game = String(opts.game ?? 'go');
+    const wantGame = String(opts.game ?? '');
     const color = String(opts.color ?? '');
-    const gameName = game === 'go' ? '围棋' : game;
     const colorName = color === 'B' ? '黑' : color === 'W' ? '白' : '随机 / 未定';
-    const head = `[对局] 游戏=${gameName}　我执=${colorName}`;
 
     let body;
     try {
-      const lib = await getLib();
-      const data = await lib.sense({ timeout: 15000 });
-      const s = lib.summarise(data);
-      body = ['=== 被敲了（桌面悬浮窗）===', head, '', s.head, '', s.text, '', s.grip, s.result, '', '盘面已读，轮到我出手。'].join('\n');
+      const { game } = await resolveGame();
+      const head = `[对局] 游戏=${game.title || game.id}　我执=${colorName}`;
+      const state = await game.read({ timeout: 15000 });
+      const rendered = String(game.render(state));
+      body = ['=== 被敲了（桌面悬浮窗）===', head, '', rendered, '', '盘面已读，轮到我出手。'].join('\n');
     } catch (e) {
       log('读盘失败:', e);
       body = [
         '=== 被敲了，但读不到盘 ===',
-        head,
+        `[对局] 我执=${colorName}${wantGame ? '　游戏=' + wantGame : ''}`,
         '',
         String(e?.message ?? e),
         '',
@@ -332,25 +336,16 @@ export function apply(ctx, rawConfig) {
   register({
     name: 'tts_board',
     description:
-      '读一次 TTS 桌面上的围棋盘：盘面、中国规则数空、盘外散子。棋盘路数/格距/坐标原点全部现场扫描，不依赖写死的尺寸。',
+      '读一次桌面，返回当前游戏摆成什么样。围棋给的是盘面 + 中国规则数空 + 盘外散子；棋盘路数/格距/坐标原点全部现场扫描，不依赖写死的尺寸。',
     parameters: {},
     timeoutMs: 40000,
     async execute() {
       try {
-        const lib = await getLib();
-        const data = await lib.sense({ timeout: 20000 });
-        const s = lib.summarise(data);
-        const lines = [s.head, '', s.text, '', s.grip, s.result];
-        if (s.offboard.length) {
-          lines.push(
-            '盘外: ' + s.offboard.map((o) => `${o.name}@(${o.x.toFixed(1)},${o.z.toFixed(1)})`).join('  '),
-          );
-        }
-        if (s.clash.length) lines.push(`⚠ 同一交叉点上有 ${s.clash.length} 颗子`);
-        if (s.unknown.length) lines.push(`⚠ 颜色不明 ${s.unknown.length} 颗`);
-        return lines.join('\n');
+        const { game } = await resolveGame();
+        const state = await game.read({ timeout: 20000 });
+        return game.render(state);
       } catch (e) {
-        return `读盘失败：${e?.message ?? e}\n（确认 TTS 开着、桌上就是那局围棋）`;
+        return `读盘失败：${e?.message ?? e}\n（确认 TTS 开着、桌上就是那局棋）`;
       }
     },
   });
@@ -372,11 +367,19 @@ export function apply(ctx, rawConfig) {
           : '悬浮窗：没来问过（没开，或者它瞄的端口不对）',
       );
       try {
-        const lib = await getLib();
-        const data = await lib.sense({ timeout: 12000 });
-        const s = lib.summarise(data);
-        lines.push(`TTS：在线 · ${s.head}`);
-        lines.push(s.grip);
+        const api = await getApi();
+        const d = await api.detect(cfg.bridgeDir, { timeout: 12000 });
+        lines.push(`TTS：在线 · 桌上 ${d.total} 个对象`);
+        if (d.game) {
+          lines.push(`认出游戏：${d.game.title || d.game.id}`);
+          const state = await d.game.read({ timeout: 12000 });
+          const rendered = String(d.game.render(state)).split('\n')[0];
+          lines.push(rendered);
+        } else if (d.games.length) {
+          lines.push(`认不出游戏。已装的：${d.games.map((g) => g.title || g.id).join('、')}`);
+        } else {
+          lines.push('一个游戏模块都没有 —— bridge/games/ 是空的');
+        }
       } catch (e) {
         lines.push(`TTS：连不上（${e?.message ?? e}）`);
         // 把「接下来该查什么」直接写在这里，省得模型自己去猜端口和进程
@@ -393,7 +396,7 @@ export function apply(ctx, rawConfig) {
   register({
     name: 'tts_judge',
     description:
-      '看一眼现在这局棋谁领先几目（已扣贴目），以及收官实地的逐点归属。用 KataGo 纯 CPU 分析，每次现起现停，不常驻。主人问「现在谁赢」「这块归谁」「贴目算完差多少」时用它。',
+      '看一眼现在这局谁领先多少（已扣贴目）、以及逐点的归属。用游戏自己的分析器（围棋走 KataGo，纯 CPU，现起现停不常驻）。主人问「现在谁赢」「这块归谁」「贴目算完差多少」时用它。',
     parameters: {
       komi: { type: 'number', description: '贴目，中国规则常用 7.5。默认 7.5' },
       visits: { type: 'number', description: '搜索量。越大越准越慢，默认 300' },
@@ -401,32 +404,15 @@ export function apply(ctx, rawConfig) {
     timeoutMs: 120000,
     async execute(args) {
       try {
-        const lib = await getLib();
-        const kg = await getKatago();
-        if (!kg.available()) {
-          return 'KataGo 没装全（引擎或权重缺一个）。目录：' + kg.KATAGO_ROOT;
+        const { game } = await resolveGame();
+        if (typeof game.analyze !== 'function') {
+          return `${game.title || game.id} 这边还没有分析器（游戏模块没实现 analyze）。`;
         }
-        const data = await lib.sense({ timeout: 20000 });
-        const grid = lib.toGrid(data);
-        const r = await kg.judge(grid, {
+        const state = await game.read({ timeout: 20000 });
+        return await game.analyze(state, {
           komi: args?.komi ?? 7.5,
           visits: args?.visits ?? 300,
         });
-
-        const lines = [];
-        lines.push(kg.verdict(r));
-        lines.push(
-          `黑方胜率 ${(r.winrate * 100).toFixed(1)}%　·　盘面 黑 ${r.blackStones} 子 / 白 ${r.whiteStones} 子　·　${(r.ms / 1000).toFixed(1)} 秒`,
-        );
-        lines.push(
-          `归属已定：黑 ${r.blackPts} 点 / 白 ${r.whitePts} 点 / 未定 ${r.unclear} 点（>0.5 才算稳）`,
-        );
-        if (r.ownership) {
-          lines.push('');
-          lines.push('X=黑地  O=白地  ·=未定');
-          lines.push(kg.renderOwnership(r.ownership));
-        }
-        return lines.join('\n');
       } catch (e) {
         return `算不出来：${e?.message ?? e}\n（读盘和引擎都正常吗？先跑 tts_board 确认 TTS 通）`;
       }
@@ -436,20 +422,22 @@ export function apply(ctx, rawConfig) {
   register({
     name: 'tts_scan',
     description:
-      '扫一遍 TTS 桌面，按对象名认出桌上摆的是哪个游戏。现在能认围棋（go_game_* 系列）；认不出来就把对象清单列出来让人判断。开局第一步先用它。',
+      '扫一遍 TTS 桌面，认出桌上摆的是哪个游戏。认的是 bridge/games/ 下装了哪些游戏；认不出来就把对象清单列出来让人判断。开局第一步先用它。',
     parameters: {},
     timeoutMs: 40000,
     async execute() {
       try {
-        const lib = await getLib();
-        const inv = await lib.inventory();
-        const lines = [`桌上 ${inv.total} 个对象`];
-        if (inv.game) {
-          lines.push(`认出游戏：${inv.game.title}（id=${inv.game.id}）`);
-          lines.push(`依据：${inv.game.evidence.join('  ')}`);
+        const api = await getApi();
+        const d = await api.detect(cfg.bridgeDir, { timeout: 20000 });
+        const lines = [`桌上 ${d.total} 个对象`];
+        if (d.game) {
+          lines.push(`认出游戏：${d.game.title || d.game.id}（id=${d.game.id}）`);
+          lines.push(`依据：${d.evidence.join('  ')}`);
         } else {
-          lines.push('认不出是什么游戏。桌上对象名：');
-          for (const n of inv.names.slice(0, 40)) lines.push(`  ${n} × ${inv.kinds[n]}`);
+          lines.push(`认不出是什么游戏。已装的：${d.games.map((g) => g.title || g.id).join('、') || '（一个都没有）'}`);
+          if (d.errors?.length) lines.push('加载出错的：' + d.errors.join('；'));
+          lines.push('桌上对象名：');
+          for (const n of d.names.slice(0, 40)) lines.push(`  ${n} × ${d.kinds[n]}`);
         }
         return lines.join('\n');
       } catch (e) {
@@ -461,20 +449,20 @@ export function apply(ctx, rawConfig) {
   register({
     name: 'tts_place',
     description:
-      '在 TTS 的围棋盘上落一手，会自动提掉被吃的对方棋子。坐标用围棋记谱：列 A~T 跳过 I，行号从下往上 1~19（如 D4、Q16）。',
+      '在棋盘上落一手（围棋）。会自动提掉被吃的对方棋子。坐标用围棋记谱：列 A~T 跳过 I，行号从下往上 1~19（如 D4、Q16）。',
     parameters: {
       color: { type: 'string', required: true, description: 'B（黑）或 W（白）' },
       coord: { type: 'string', required: true, description: '围棋坐标，如 D4' },
     },
     timeoutMs: 90000,
     async execute(args) {
-      const color = String(args?.color ?? '').toUpperCase();
-      if (color !== 'B' && color !== 'W') return 'color 只能是 B 或 W';
       try {
-        const lib = await getLib();
-        const r = await lib.place(color, String(args?.coord ?? ''));
-        const cap = r.captures.length ? `，提掉 ${r.captures.length} 子（${r.captures.join(' ')}）` : '，没提子';
-        return `已落 ${r.color} ${r.coord}${cap}。落点偏差 ${r.offset}。`;
+        const { game } = await resolveGame();
+        const act = game.actions?.place;
+        if (typeof act !== 'function') {
+          return `${game.title || game.id} 没有「落子」这个动作，能用的是：${Object.keys(game.actions || {}).join('、') || '（无）'}`;
+        }
+        return await act({ color: args?.color, coord: args?.coord });
       } catch (e) {
         return `落子失败：${e?.message ?? e}`;
       }
@@ -483,18 +471,48 @@ export function apply(ctx, rawConfig) {
 
   register({
     name: 'tts_remove',
-    description: '把围棋盘上某一颗子收走。下错了悔一步、或者替主人收掉被吃的子时用。',
+    description: '把棋盘上某一颗子收走（围棋）。下错了悔一步、或者替主人收掉被吃的子时用。',
     parameters: {
       coord: { type: 'string', required: true, description: '围棋坐标，如 D4' },
     },
     timeoutMs: 40000,
     async execute(args) {
       try {
-        const lib = await getLib();
-        const r = await lib.remove(String(args?.coord ?? ''));
-        return `已收走 ${r.coord} 的${r.color}子`;
+        const { game } = await resolveGame();
+        const act = game.actions?.remove;
+        if (typeof act !== 'function') {
+          return `${game.title || game.id} 没有「收子」这个动作，能用的是：${Object.keys(game.actions || {}).join('、') || '（无）'}`;
+        }
+        return await act({ coord: args?.coord });
       } catch (e) {
         return `收子失败：${e?.message ?? e}`;
+      }
+    },
+  });
+
+  register({
+    name: 'tts_act',
+    description:
+      '对当前游戏执行一个动作，参数原样转给游戏模块。围棋有两个：place（落子）、remove（收子）。接别的游戏时，新加的动作从这个口子调，不用改插件。',
+    parameters: {
+      action: { type: 'string', required: true, description: '动作名，如 place' },
+      color: { type: 'string', description: '给 place 用：B 或 W' },
+      coord: { type: 'string', description: '给 place / remove 用：坐标，如 D4' },
+    },
+    timeoutMs: 90000,
+    async execute(args) {
+      try {
+        const { game } = await resolveGame();
+        const name = String(args?.action ?? '').trim();
+        const acts = game.actions || {};
+        const act = acts[name];
+        if (typeof act !== 'function') {
+          return `${game.title || game.id} 没有「${name}」这个动作。能用的是：${Object.keys(acts).join('、') || '（无）'}`;
+        }
+        const { action, ...rest } = args ?? {};
+        return await act(rest);
+      } catch (e) {
+        return `动作失败：${e?.message ?? e}`;
       }
     },
   });

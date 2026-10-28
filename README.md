@@ -43,10 +43,11 @@ Tabletop Simulator 有一个 External Editor API：双向 TCP，能读桌上每�
 | 能力 | 在哪 |
 |---|---|
 | 连 TTS、跑 Lua、收 `print` 回包 | `bridge/tts-core.mjs` |
-| 桌面对象清单、类型、体积、位置扫描 | `bridge/gosense.lua`（写法可复用） |
-| 六个 dsh 工具 | `index.js` |
-| 给桌面窗口的 HTTP：状态、敲击、聊天收发 | `index.js` |
+| 扫桌面对象名（任何桌游都用得上） | `bridge/game-api.mjs` |
+| **游戏层接口 + 目录扫描 + 认游戏** | `bridge/game-api.mjs` |
+| 七个 dsh 工具、给桌面窗口的 HTTP | `index.js` |
 | 圆角半透明悬浮窗、三态指示、聊天面板、点击穿透 | `overlay/overlay.cs` |
+| 围棋（游戏层的一个实现） | `bridge/games/go.mjs` |
 | 围棋规则与棋盘几何 | `bridge/golib.mjs` |
 | 形势判断（胜率 / 领先目数 / 逐点归属） | `bridge/katago.mjs` |
 
@@ -63,25 +64,67 @@ Tabletop Simulator 有一个 External Editor API：双向 TCP，能读桌上每�
 
 ## 接一个新游戏
 
-游戏层要交出的东西是四件事。照着 `bridge/golib.mjs` 的骨架写一份就行：
+**往 `bridge/games/` 放一个 `.mjs` 就完事了，`index.js` 一行不用改。**
 
-**1. 认游戏** —— `inventory()` 里按对象名前缀判断桌上是什么。
-现在的写法是 `go_game_*` 认成围棋；加一个分支，另一套前缀认成你的游戏。
+插件每次调用工具时都会扫那个目录、认当前桌上是什么游戏、把活派给对应的模块。文件名以 `_` 开头的会被跳过（留给草稿）。
 
-**2. 读盘** —— 一个 `sense()`：往 TTS 里推一段 Lua，让它把桌面状态拼成一条 `print` 打回来，再解析成你的数据结构。
-注意协议层的硬约束：**回传只能靠一条带标记的 `print`**，多条会丢会乱序。所以读盘脚本必须把结果攒成一条再打。
+一个游戏模块长这样：
 
-**3. 渲染** —— 一个 `render()`：把读到的状态变成模型能读的文字盘面。
-这条决定了模型看得懂多少，比想象中重要。
+```js
+export default {
+  id: 'go',
+  title: '围棋',
 
-**4. 动作** —— 落子、拿子、放子，一步一个函数。TTS 里能做的事基本都能做：`takeObject` / `placeObject` / `setPosition` / `setRotation` / `destroy`。
+  // 从桌面对象名清单认游戏。认不出返回 null。
+  recognize(names) {
+    const hit = names.filter((n) => n.startsWith('go_game_'));
+    return hit.length ? { confidence: hit.length, evidence: hit } : null;
+  },
 
-绕不开的两个坑，先写在前面：
+  // 读一次桌面。返回什么都行，后面 render / actions 拿到的就是这个。
+  async read() {
+    /* 往 TTS 推一段 Lua，把桌面状态拼成一条 print 打回来，再解析 */
+  },
 
-- **容器对象（棋罐、牌堆、袋子）的 `type` 跟里面的东西是一样的。** 围棋这边就是棋罐也是 `GoPiece`，按类型挑棋子会把四格宽的罐子一起选中。只能靠体积/尺寸排除。
+  // 把 read() 的结果变成模型能读的文字。整个接口里最要紧的一个。
+  render(state) {
+    /* return 一段文字 */
+  },
+
+  // 动作表：name → async (args) => 一句给模型看的结果
+  actions: {
+    place: async ({ color, coord }) => '…',
+    remove: async ({ coord }) => '…',
+  },
+
+  // 可选：形势判断。不实现就没法用 tts_judge。
+  async analyze(state, args) {
+    /* return 一段结论 */
+  },
+};
+```
+
+`bridge/games/go.mjs` 就是照这个写的，抄一份改名最快。
+
+### 工具派给谁
+
+| 工具 | 调游戏模块的什么 |
+|---|---|
+| `tts_scan` | `recognize(names)` |
+| `tts_board` | `read()` → `render()` |
+| `tts_place` | `actions.place` |
+| `tts_remove` | `actions.remove` |
+| `tts_judge` | `analyze()`，没实现就直说 |
+| `tts_act` | `actions[action]` —— **新动作从这个口子调，不用加工具** |
+
+`tts_state` 和 `tts_scan` 跟游戏无关，任何桌游都用。
+
+### 写之前该知道的两件事
+
+- **容器对象（棋罐、牌堆、袋子）的 `type` 跟里面的东西一样。** 围棋这边棋罐也是 `GoPiece`，按类型挑棋子会把四格宽的罐子一起选中。只能靠尺寸排除。
 - **`spawnObject` 不可靠**，但从容器里拿是可靠的：`bowl.takeObject({ position, callback_function })`。回调可能下一帧才跑，收不到回包就读盘看目标点有没有东西。
 
-现在的状态得说清楚：**游戏层还是硬接的**——`index.js` 里的六个工具直接调 `golib`，没有「按当前游戏分发」的中间层。想让第二款游戏跟围棋并存，得把游戏层抽成一个统一的 `{ sense, render, act }` 接口，插件按认出来的游戏分发。这步还没做，但目录和职责已经按这个方向分开了。
+再加一条协议硬约束：**回传只能靠一条带标记的 `print`**，多条会丢会乱序。读盘脚本必须把结果攒成一条再打出来。
 
 ---
 
@@ -167,6 +210,7 @@ node tools/fetch-katago.mjs --net b28c512nbt    # 换更大的网络，更准更
 | `tts_place` | 落一手（`color: B/W`，`coord: D4`） |
 | `tts_remove` | 收走一颗子（悔棋） |
 | `tts_judge` | 算形势：领先目数 + 胜率 + 逐点归属图（需要 KataGo） |
+| `tts_act` | 执行任意动作（`action` + 参数原样转给游戏模块），接新游戏用这个口子 |
 
 ---
 
@@ -199,7 +243,6 @@ node tools/fetch-katago.mjs --net b28c512nbt    # 换更大的网络，更准更
 - 围棋层**没做**打劫判定和轮次记录。收子是按下子后的气数现场算的，重复提劫这类情况不会拦。
 - `tts_judge` 每次要重新加载模型，纯 CPU 大概 8–10 秒出结果。
 - 悬浮窗只编译了 Windows 版。
-- **游戏层没有统一接口**，第二款游戏要接进来得先做接口抽取（见上一节）。
 - 聊天面板跟 dsh 的会话是同一个——你在面板里说话，就是给那个会话发消息。
 
 ---
@@ -208,11 +251,14 @@ node tools/fetch-katago.mjs --net b28c512nbt    # 换更大的网络，更准更
 
 ```
 .
-├── index.js              dsh 插件：六个工具 + 给桌面窗口的 HTTP
+├── index.js              dsh 插件：七个工具 + 给桌面窗口的 HTTP
 ├── cordis.patch.yml      bundle patch
 ├── bridge/
 │   ├── tts-core.mjs      协议层：连 39999、收 39998、串行闸门
-│   ├── golib.mjs         围棋：读盘、落子、提子、数空、认游戏
+│   ├── game-api.mjs      游戏层接口 + 扫目录 + 认游戏
+│   ├── games/
+│   │   └── go.mjs        围棋（游戏层的一个实现，接新游戏照它抄）
+│   ├── golib.mjs         围棋：读盘、落子、提子、数空
 │   ├── gosense.lua       推进 TTS 里跑的读盘脚本（零硬编码）
 │   ├── katago.mjs        形势分析：起引擎、喂局面、算归属
 │   └── katago.cfg        分析参数
