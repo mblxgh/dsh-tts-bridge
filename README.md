@@ -167,14 +167,13 @@ dsh plugin --profile web add /path/to/dsh-tts-bridge
 
 `patchReload: live` 时改这个文件会热重载；**插件代码本身改了要重启 dsh**（ESM 有缓存）。
 
-### 悬浮窗（可选）
+### 悬浮窗
 
-```bat
-cd overlay
-build.cmd
-```
+`overlay/overlay.exe` **跟着包一起发，不用自己编译**。装好插件之后，让 dsh 跑一次 `tts_overlay` 就起来了 —— 重复叫不会叠出第二块，有单实例锁。
 
-编译出 `overlay.exe`，双击即可。它靠每秒问一次 `/status` 判断 dsh 在不在，问不到就显示灰色的「掉线」。
+牌子上有：`敲一下`（主按钮，等于叫 dsh 走一步）、`围棋` / `执色` 两个下拉（**选好再敲**，注入文本里会写「我执=黑」还是「白」）、`聊`（聊天面板，不用切回浏览器）。
+
+那行小字是三态：蓝色「待机」/ 黄色「思考中」/ 灰色「掉线」。灰色说明它连不上插件的端口。
 
 牌子上的名字是作者自己那个助手的名（大肥鱼）。想换成你的，改 `overlay.cs` 里 `Text = "大肥鱼"` 那一行，重新 `build.cmd`。
 
@@ -211,6 +210,7 @@ node tools/fetch-katago.mjs --net b28c512nbt    # 换更大的网络，更准更
 | `tts_remove` | 收走一颗子（悔棋） |
 | `tts_judge` | 算形势：领先目数 + 胜率 + 逐点归属图（需要 KataGo） |
 | `tts_act` | 执行任意动作（`action` + 参数原样转给游戏模块），接新游戏用这个口子 |
+| `tts_overlay` | 开桌面悬浮窗（exe 就在包里，叫一次就行） |
 
 ---
 

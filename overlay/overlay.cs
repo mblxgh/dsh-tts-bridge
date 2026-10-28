@@ -1497,9 +1497,17 @@ static class Program
         catch { }
     }
 
+    // 插件每次启动都会拉一次悬浮窗，多出来的自己退 —— 别在桌上叠两块牌子。
+    // 一个名字一把锁，进程活着锁就在；进程一死 OS 自动释放。
+    static Mutex singleInstance;
+
     [STAThread]
     static void Main()
     {
+        bool isFirst;
+        singleInstance = new Mutex(true, "dsh-tts-bridge-overlay", out isFirst);
+        if (!isFirst) return;
+
         AppDomain.CurrentDomain.UnhandledException += delegate (object s, UnhandledExceptionEventArgs e) { LogEx("appdomain", e.ExceptionObject); };
         Application.ThreadException += delegate (object s, ThreadExceptionEventArgs e) { LogEx("thread", e.Exception); };
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);

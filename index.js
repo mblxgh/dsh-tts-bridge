@@ -21,6 +21,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import z from '@deepseek-ai/schemastery';
 import { defineTool } from '@deepseek-ai/dsh-tools';
@@ -667,7 +668,62 @@ export function apply(ctx, rawConfig) {
     };
   }, 'tts-bridge-http');
 
-  log('已就绪：工具 tts_board / tts_state，HTTP /status /knock');
+  // ── 悬浮窗：装完插件就把它拉起来，不指望人记得去点 ──
+  // 它是独立的一个 exe，没有它「敲一下」这条链路就是断的。没有现成的就先编译一个
+  // （csc 是 Windows 自带的，不用装任何东西）。
+  // ── 桌面悬浮窗：exe 就在包里，工具叫一下才起（不自动起，免得抢窗口焦点）──
+  let overlayChild = null;
+
+  const overlayExe = () => {
+    const pkgRoot = path.dirname(fileURLToPath(import.meta.url));
+    return (
+      [
+        path.join(pkgRoot, 'overlay', 'overlay.exe'),
+        path.join(cfg.bridgeDir, '..', 'overlay', 'overlay.exe'),
+      ].find((x) => fs.existsSync(x)) ?? null
+    );
+  };
+
+  function launchOverlay() {
+    const exe = overlayExe();
+    if (!exe) return { ok: false, why: '包里的 overlay/overlay.exe 不在' };
+    try {
+      // 不 detached：dsh 退出它跟着走，不留孤儿窗口；unref 保证不拖住进程退出。
+      // 重复叫无所谓 —— overlay 自己有单实例锁，多出来的会立刻退。
+      const child = spawn(exe, [], {
+        cwd: path.dirname(exe),
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+      overlayChild = child;
+      log('悬浮窗起来了：' + exe);
+      return { ok: true, exe };
+    } catch (e) {
+      log('悬浮窗起不来：' + (e?.message ?? e));
+      return { ok: false, why: e?.message ?? String(e) };
+    }
+  }
+
+  register({
+    name: 'tts_overlay',
+    description:
+      '开桌面那块悬浮窗。牌子上有「敲一下」（主人点一下，我这边就收到盘面和执色，等于叫我走棋）、「游戏」和「执色」两个下拉、还有「聊」（不切回浏览器就能跟他说话）。装好插件第一次用、或者重启过 dsh 之后要叫它一次；重复叫不会叠出第二块。',
+    parameters: {},
+    timeoutMs: 20000,
+    async execute() {
+      if (overlaySeenAt && Date.now() - overlaySeenAt < 8000) {
+        return '悬浮窗已经在跑了（刚刚还来问过 /status）。';
+      }
+      const r = launchOverlay();
+      if (!r.ok) {
+        return `拉不起来：${r.why}\n（exe 应该在包里的 overlay/overlay.exe；没有就先用 overlay/build.cmd 编一个）`;
+      }
+      return `悬浮窗已拉起：${r.exe}\n过两秒看牌子那行小字：蓝色「待机」是连上了，灰色「掉线」说明它连不上 127.0.0.1:${cfg.port}。`;
+    },
+  });
+
+  log('已就绪：八个工具 + HTTP /status /knock /chatlog /chat；悬浮窗用 tts_overlay 开');
 }
 
 // ⚠️ 这里绝对不要写 export default：

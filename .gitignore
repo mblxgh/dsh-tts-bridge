@@ -1,8 +1,8 @@
-# 编译产物
-overlay/*.exe
+# 编译产物 —— overlay.exe 跟着包一起发（装完就能用），不排除
 overlay/overlay.cfg
 overlay/logs/
 overlay/*.log
+overlay/overlay-error.log
 
 # KataGo 引擎与权重（自己下，别进仓库）
 bridge/katago/
