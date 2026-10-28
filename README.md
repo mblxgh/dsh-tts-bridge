@@ -238,6 +238,26 @@ node tools/fetch-katago.mjs --net b28c512nbt    # 换更大的网络，更准更
 
 ---
 
+## 支持的 dsh 版本
+
+| 范围 | 状态 |
+|---|---|
+| `0.1.5` 全系列（rc.1 / rc.2 / rc.3） | **实跑**，日常在用 |
+| `0.2.x` | 接口逐项对照过，**没实跑** |
+| `0.1.0` ～ `0.1.3` | 没验证，不保证 |
+
+拿 0.2.1-rc.2 的包跟本机 0.1.5 逐个比过：
+
+- `createUserMessage` 的签名两版完全一致
+- 消息的 `source.kind` 两版都有 `user`
+- `agents.roots()` / `agent.whenIdle()` / `agent/assistant-stream` 在 `dsh-session` / `dsh-agent` 里都还在
+
+**0.2 有一个会咬人的改动**：`source.kind: 'plugin'` 被删掉了。往会话里注入消息如果用了 `plugin`，0.2 上会报 `format v4 message requires a producer-owned source kind`。这个插件注入走的是 `kind: 'user'`，不受影响。
+
+因为这个插件依赖了几个不在公开插件契约里的内部接口（`agents.roots()` 这类），**升 dsh 大版本前先跑一遍 `tts_state`**，确认能连上、能认出游戏，再往下用。
+
+---
+
 ## 已知限制
 
 - 围棋层**没做**打劫判定和轮次记录。收子是按下子后的气数现场算的，重复提劫这类情况不会拦。
