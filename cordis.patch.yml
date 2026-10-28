@@ -1,0 +1,11 @@
+# dsh-tts-bridge 的 bundle patch
+#
+# - id 不能跟树内已有条目撞（撞了启动会报 duplicate loader entry id）
+# - name 必须准确等于本包名，写错会被装配静默跳过
+# - port 是留给桌面悬浮窗的：它轮询 /status 判断 dsh 在不在，按按钮就是 POST /knock
+# - bridgeDir 不填就默认用本包旁边的 bridge/ 目录；只有你要把后端代码放到别处时才需要写
+- insert:
+    - id: tts-bridge
+      name: 'dsh-tts-bridge'
+      config:
+        port: 39902

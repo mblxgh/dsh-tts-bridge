@@ -1,0 +1,31 @@
+{
+  "name": "dsh-tts-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "description": "Let DeepSeek Harness play tabletop games on Tabletop Simulator: read the board, place stones, and drive a desktop overlay you can knock on.",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "tabletop-simulator",
+    "go",
+    "baduk",
+    "katago"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "engines": { "dsh": ">=0.1.5-rc.1" },
+    "bundle": { "patch": "./cordis.patch.yml" }
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "bridge/",
+    "overlay/",
+    "tools/"
+  ]
+}

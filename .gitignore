@@ -1,0 +1,12 @@
+# 编译产物
+overlay/*.exe
+overlay/overlay.cfg
+overlay/logs/
+overlay/*.log
+
+# KataGo 引擎与权重（自己下，别进仓库）
+bridge/katago/
+
+# 运行期产生的
+*.log
+logs/

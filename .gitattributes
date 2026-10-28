@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+# 二进制，别做任何转换
+*.exe binary
+*.dll binary
+*.png binary
+*.gz binary
+*.zip binary
+
+# 编译产物与本地配置
+overlay/overlay.exe -text
